@@ -6,7 +6,7 @@
   <title>Smart Table Order</title>
 
   <!-- PWA & Mobile WebApp Capabilities -->
-  <meta name="theme-color" content="#00454f">
+  <meta name="theme-color" content="#0ba17b">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="mobile-web-app-capable" content="yes">
@@ -50,42 +50,82 @@
   <script>
     (function() {
       // 1. URL WebApp Apps Script Exec Anda
-      var GAS_EXEC_URL = "https://script.google.com/macros/s/AKfycbxslOavQ9lRkAZ_eSvPSqijWEgVX6qXJ3DkY--sefJhXaoItOMFUHzqRydN5lvqJeJ6rQ/exec";
+      var GAS_EXEC_URL = "https://script.google.com/macros/s/AKfycbzNB_Ko-E6oRe0snyyDYZKfh4d3PQb_eoS-xoBbfsd_tCrPMCzSxHUz6QYYji5-EJav4w/exec";
 
-      // 2. Ekstraksi nomor meja dari URL browser (Query Params atau Hash QR)
-      var currentUrl = new URL(window.location.href);
-      var tableParam = currentUrl.searchParams.get('meja') || 
-                       currentUrl.searchParams.get('table') || 
-                       currentUrl.searchParams.get('m');
+      var fullUrl = window.location.href;
 
-      // Dukungan format hash (#meja=05 atau #05)
-      if (!tableParam && window.location.hash) {
-        var hashClean = window.location.hash.replace('#', '');
-        var hashMatch = hashClean.match(/(?:meja|table)=([^&]+)/i);
-        if (hashMatch) {
-          tableParam = hashMatch[1];
-        } else if (/^\d+$/.test(hashClean)) {
-          tableParam = hashClean;
-        }
+      // 2. Ekstraksi Cabang & Meja yang fleksibel (mendukung format ?Cilegon PCI?meja=08 atau ?cabang=Cilegon PCI&meja=08)
+      var branchDetected = "";
+      var tableDetected = "";
+
+      // Pola A: URL menggunakan tanda tanya ganda atau query param custom
+      // Contoh: ?Cilegon PCI?meja=08 atau ?Cilegon%20PCI?meja=08
+      var searchPart = window.location.search || "";
+      if (searchPart.startsWith("?")) {
+        var querySegments = searchPart.substring(1).split(/[?&]/);
+        querySegments.forEach(function(segment) {
+          if (!segment) return;
+          var decodedSegment = decodeURIComponent(segment.replace(/\+/g, " "));
+
+          // Cek jika bagian ini adalah meja
+          var tableMatch = decodedSegment.match(/^(?:meja|table|m)=(.*)$/i);
+          if (tableMatch) {
+            tableDetected = tableMatch[1].trim();
+            return;
+          }
+
+          // Cek jika eksplisit cabang=...
+          var branchMatch = decodedSegment.match(/^(?:cabang|branch|outlet)=(.*)$/i);
+          if (branchMatch) {
+            branchDetected = branchMatch[1].trim();
+            return;
+          }
+
+          // Jika segmen tidak mengandung '=', kemungkinan besar ini nama cabang langsung (misal: "Cilegon PCI")
+          if (decodedSegment.indexOf('=') === -1 && !branchDetected) {
+            branchDetected = decodedSegment.trim();
+          }
+        });
       }
 
-      // Format nomor meja default jika tidak ada di URL
-      var tableNumber = tableParam ? String(tableParam).trim() : '01';
-      var tableFormatted = /^\d+$/.test(tableNumber) ? ('Meja ' + tableNumber.padStart(2, '0')) : tableNumber;
+      // Dukungan format hash (#Cilegon PCI#meja=08 atau sejenisnya)
+      if (window.location.hash) {
+        var hashSegments = window.location.hash.substring(1).split(/[#&?]/);
+        hashSegments.forEach(function(seg) {
+          if (!seg) return;
+          var dec = decodeURIComponent(seg.replace(/\+/g, " "));
+          var tMatch = dec.match(/^(?:meja|table|m)=(.*)$/i);
+          if (tMatch) tableDetected = tMatch[1].trim();
+          else if (/^\d+$/.test(dec) && !tableDetected) tableDetected = dec;
+          else if (dec.indexOf('=') === -1 && !branchDetected) branchDetected = dec.trim();
+        });
+      }
 
-      // 3. Teruskan seluruh query parameter ke WebApp
-      currentUrl.searchParams.set('meja', tableNumber);
-      var targetSrc = GAS_EXEC_URL + '?' + currentUrl.searchParams.toString();
+      // Default jika kosong
+      var finalTable = tableDetected ? tableDetected : '01';
+      var formattedTable = /^\d+$/.test(finalTable) ? ('Meja ' + finalTable.padStart(2, '0')) : finalTable;
 
-      // 4. Set src iframe secara langsung
+      // 3. Susun URL target ke Google Apps Script
+      var gasUrlObj = new URL(GAS_EXEC_URL);
+      gasUrlObj.searchParams.set('meja', finalTable);
+      if (branchDetected) {
+        gasUrlObj.searchParams.set('cabang', branchDetected);
+      }
+
+      var targetSrc = gasUrlObj.toString();
+
+      // 4. Set src iframe & kirim pesan postMessage
       var iframe = document.getElementById('appFrame');
       if (iframe) {
         iframe.src = targetSrc;
 
-        // PostMessage jaminan nomor meja saat iframe selesai memuat
         iframe.onload = function() {
           try {
-            iframe.contentWindow.postMessage({ meja: tableFormatted, table: tableFormatted }, '*');
+            iframe.contentWindow.postMessage({
+              meja: formattedTable,
+              table: formattedTable,
+              cabang: branchDetected
+            }, '*');
           } catch (e) {}
         };
       }
